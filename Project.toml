@@ -1,0 +1,13 @@
+name = "JuliaEcosystemGraph"
+uuid = "bdf6e3e9-ee63-45bd-be02-a224df265319"
+authors = ["mthelm85"]
+version = "0.1.0"
+
+[deps]
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+Downloads = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
+Graphs = "86223c79-3864-5bf0-83f7-82e725a168b6"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+RDF = "3fbc022c-18f7-42fc-beaf-ca56153ab0b3"

@@ -1,0 +1,586 @@
+---
+title: "The Julia package ecosystem: a structural snapshot"
+subtitle: "Dependency structure, contributor data, and maintenance signals from the General registry, 21 July 2026"
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 2
+    page-layout: full
+    embed-resources: true
+    fig-cap-location: bottom
+jupyter: julia-pkgkg-1.12
+execute:
+  echo: false
+  warning: false
+---
+
+<!-- Vendored D3 (inlined by embed-resources → fully offline, no CDN). All
+interactive figures below are plain D3 + the window.__DATA_* payloads that the
+Julia cells write, so nothing on this page needs a network connection. -->
+<script src="libs/d3.min.js"></script>
+
+```{julia}
+#| output: false
+using RDF, Graphs, DataFrames, Statistics, Dates
+import JSON
+include("graphtools.jl")
+
+const DS = rdf_read(joinpath("..", "julia_ecosystem.nq"))
+const G  = DS.default_graph
+
+snapmetric(pred) = snapmetric_ds(DS, pred)
+
+n_pkg    = scalar(DS, "SELECT (COUNT(DISTINCT ?p) AS ?n) WHERE { ?p a jl:Package }")
+# distinct accounts that appear as a contributor (not just any foaf:nick holder,
+# which would also count repo owners who never committed)
+n_people = scalar(DS, "SELECT (COUNT(DISTINCT ?person) AS ?n) WHERE { ?pkg dcterms:contributor ?person }")
+n_dep    = scalar(DS, "SELECT (COUNT(*) AS ?n) WHERE { ?a jl:dependsOn ?b }")
+n_jll    = scalar(DS, "SELECT (COUNT(DISTINCT ?p) AS ?n) WHERE { ?p jl:isJLL true }")
+
+# Read the snapshot date straight from the graph so prose never drifts from data.
+SNAP_DATE  = string(scalar(DS, "SELECT ?d WHERE { GRAPH ?g { ?s a jl:Snapshot ; jl:observedAt ?d } } LIMIT 1"))
+SNAP_HUMAN = Dates.format(Date(SNAP_DATE), dateformat"d U yyyy")
+
+# Standard-library coverage: how many of this Julia's stdlibs are registered in
+# General (and therefore graph nodes) versus not. Computed, not hardcoded.
+allpkgnames  = String.(q(DS, "SELECT ?name WHERE { ?p a jl:Package ; rdfs:label ?name }").name)
+n_stdlib     = length(STDLIBS)
+n_stdlib_reg = count(isstdlib, allpkgnames)
+
+TS  = trust_surface(DS)
+NET = network_data(DS)
+IDX = package_index(DS, TS)
+nothing
+```
+
+::: {.callout-note appearance="minimal"}
+All figures are computed from a single dataset describing the General registry
+on **`{julia} SNAP_HUMAN`**: every registered package, its dependency edges,
+its GitHub repository metadata, and its commit authors. Construction and known
+limitations are described in [Methods & limitations](#methods).
+:::
+
+# Registry totals
+
+```{julia}
+#| output: asis
+stat(v, k) = """<div style="flex:1;min-width:140px;text-align:center">
+  <div style="font-size:2.4rem;font-weight:700;line-height:1">$(fmt_int(v))</div>
+  <div style="color:#888">$k</div></div>"""
+println("""<div style="display:flex;gap:2rem;flex-wrap:wrap;margin:1.4rem 0">
+$(stat(n_pkg,"packages"))$(stat(n_people,"contributors"))$(stat(n_dep,"dependency links"))$(stat(n_jll,"binary wrappers"))
+</div>""")
+```
+
+`_jll` wrappers account for `{julia} round(Int, 100*n_jll/n_pkg)`% of the
+registry (`{julia} fmt_int(n_jll)` packages). Being BinaryBuilder-generated
+rather than hand-authored, they are excluded from the ranked analyses below,
+as are standard libraries — the registry represents standard libraries only
+partially (see [Methods](#methods)), so including them would be inconsistent.
+"Contributors" counts distinct GitHub accounts credited with at least one
+commit to at least one registered package. Exclusions are stated per figure.
+
+# Dependency load: direct and transitive dependents {#load-bearing}
+
+For each package, the direct-dependent count is its in-degree in the
+dependency graph; the transitive-dependent count is the number of packages
+from which it is reachable. The table ranks by the latter, over registered
+packages excluding standard libraries and JLL wrappers (see note).
+
+```{julia}
+#| output: asis
+ld = q(DS, """
+  SELECT ?name ?dir ?trans WHERE {
+    GRAPH ?g { ?s jl:forPackage ?pkg ; jl:directDependents ?dir ; jl:transitiveDependents ?trans . }
+    ?pkg rdfs:label ?name .
+    FILTER NOT EXISTS { ?pkg jl:isJLL true }
+  }""")
+ld.name = String.(ld.name); ld.dir = Int.(ld.dir); ld.trans = Int.(ld.trans)
+filter!(r -> !isstdlib(r.name), ld)
+sort!(ld, :trans, rev=true)
+lines = ["| # | Package | Direct | Transitive |", "|--:|:--|--:|--:|"]
+for (i, r) in enumerate(eachrow(first(ld, 15)))
+    push!(lines, "| $i | $(juliahub_link(r.name)) | $(fmt_int(r.dir)) | **$(fmt_int(r.trans))** |")
+end
+println(join(lines, "\n"))
+```
+
+: Registered packages (excluding standard libraries and JLL wrappers) ranked
+by transitive dependents. {.striped tbl-colwidths="[6,44,22,28]"}
+
+Direct and transitive counts differ by one to two orders of magnitude at the
+top of the distribution. The highest-ranked package, `{julia} ld.name[1]`, has
+`{julia} fmt_int(ld.dir[1])` direct dependents but is reachable from
+**`{julia} fmt_int(ld.trans[1])`** packages
+(`{julia} round(Int, 100*ld.trans[1]/n_pkg)`% of the registry). The ranking is
+dominated by low-level infrastructure — array and iterator interfaces, compiler
+and macro utilities, serialization, and numerical primitives — rather than
+end-user libraries.
+
+::: {.callout-tip appearance="minimal"}
+Source: registry dependency graph (latest registered version). Direct = number
+of packages declaring this one as a direct dependency; transitive = number of
+packages from which it is reachable, computed on the whole graph with
+strongly-connected-component condensation (cycle-safe). Standard libraries are
+excluded here because the registry represents them incompletely: only
+`{julia} n_stdlib_reg` of Julia's `{julia} n_stdlib` standard libraries are
+registered in General (e.g. `TOML`, `Artifacts`) and would otherwise rank near
+the top, while the rest (`LinearAlgebra`, `Random`, …) are not registry entries
+and are absent from the graph entirely. See [Methods](#methods).
+:::
+
+# GitHub stars versus dependency PageRank {#invisible}
+
+GitHub stars and dependency PageRank measure different things: stars are a
+user-facing popularity signal, PageRank is computed over the dependency graph
+and weights a package by the importance of the packages that depend on it. The
+scatter below plots the two on log axes.
+
+```{julia}
+#| output: asis
+sc = q(DS, """
+  SELECT ?name ?stars ?pr ?dep WHERE {
+    GRAPH ?g { ?s jl:forPackage ?pkg ; jl:stars ?stars ; jl:pagerank ?pr ; jl:directDependents ?dep . }
+    ?pkg rdfs:label ?name .
+    FILTER NOT EXISTS { ?pkg jl:isJLL true }
+  }""")
+recs = [Dict("name"=>String(r.name), "stars"=>Int(r.stars),
+             "pr"=>Float64(r.pr), "dep"=>Int(r.dep))
+        for r in eachrow(sc) if !isstdlib(String(r.name))]
+embed_json("scatter", recs)
+```
+
+::: {.column-page}
+<div id="scatter-viz" style="position:relative"></div>
+:::
+
+<script>
+window.__viz = window.__viz || {};
+window.__viz.scatter = function () {
+  const data = window.__DATA_scatter.filter(d => d.stars > 0 && d.pr > 0);
+  const W = 900, H = 560, m = {t:20,r:20,b:55,l:70};
+  const root = d3.select("#scatter-viz");
+  root.selectAll("*").remove();
+  const svg = root.append("svg").attr("viewBox", [0,0,W,H])
+    .attr("style","max-width:100%;height:auto;font:11px system-ui");
+  const x = d3.scaleLog().domain([1, d3.max(data,d=>d.stars)*1.1]).range([m.l, W-m.r]);
+  const y = d3.scaleLog().domain([d3.min(data,d=>d.pr)*0.9, d3.max(data,d=>d.pr)*1.1]).range([H-m.b, m.t]);
+  svg.append("g").attr("transform",`translate(0,${H-m.b})`).call(d3.axisBottom(x).ticks(6,"~s"));
+  svg.append("g").attr("transform",`translate(${m.l},0)`).call(d3.axisLeft(y).ticks(6,"~e"));
+  svg.append("text").attr("x",(W)/2).attr("y",H-12).attr("text-anchor","middle").attr("fill","#555").text("GitHub stars →");
+  svg.append("text").attr("transform","rotate(-90)").attr("x",-(H)/2).attr("y",16).attr("text-anchor","middle").attr("fill","#555").text("↑ dependency PageRank");
+
+  const tip = root.append("div").attr("style",
+    "position:absolute;pointer-events:none;background:#222;color:#fff;padding:4px 8px;border-radius:4px;font:11px system-ui;opacity:0;transition:opacity .1s;z-index:10");
+
+  svg.append("g").selectAll("circle").data(data).join("circle")
+    .attr("cx",d=>x(d.stars)).attr("cy",d=>y(d.pr)).attr("r",3)
+    .attr("fill","#4c78a8").attr("fill-opacity",0.35)
+    .on("mousemove",(e,d)=>{
+      tip.style("opacity",1)
+        .style("left",(e.offsetX+12)+"px").style("top",(e.offsetY-10)+"px")
+        .html(`<b>${d.name}</b><br>${d.stars.toLocaleString()} stars · ${d.dep} dependents`);
+    })
+    .on("mouseleave",()=>tip.style("opacity",0));
+
+  // Label high-PageRank / low-star points. Place highest-PageRank first and
+  // greedily skip any label whose box would overlap one already placed, so the
+  // shown labels stay legible; unlabeled points still name themselves on hover.
+  const cand = data.filter(d => d.pr > 0.004 && d.stars < 400).sort((a,b)=>b.pr-a.pr);
+  const boxes = [], chosen = [];
+  for (const d of cand) {
+    const lx = x(d.stars)+5, ly = y(d.pr)-4, w = d.name.length*5.4, h = 11;
+    const b = {x1:lx, y1:ly-h, x2:lx+w, y2:ly};
+    if (boxes.some(p => !(b.x2 < p.x1 || b.x1 > p.x2 || b.y2 < p.y1 || b.y1 > p.y2))) continue;
+    boxes.push(b); chosen.push({d, lx, ly});
+  }
+  svg.append("g").selectAll("text").data(chosen).join("text")
+    .attr("x",c=>c.lx).attr("y",c=>c.ly).attr("fill","#c0392b").attr("font-size",10)
+    .attr("paint-order","stroke").attr("stroke","white").attr("stroke-width",2.5)
+    .text(c=>c.d.name);
+};
+</script>
+
+The two quantities are weakly correlated. The points labeled in red are those
+with high PageRank but fewer than 400 stars — high dependency load paired with
+limited direct attention. These are typically low-level dependencies that are
+rarely installed directly and so accumulate few stars relative to their
+position in the graph.
+
+::: {.callout-tip appearance="minimal"}
+Source: registry dependency graph (PageRank) × GitHub stars. Stars are a
+repository-level metric and accumulate over a package's lifetime, so older
+packages are advantaged. PageRank is one of several centrality measures; the
+raw dependent counts in the table above are an alternative.
+:::
+
+# High transitive-to-direct dependent ratios {#hidden}
+
+The ratio of transitive to direct dependents identifies packages with a small
+number of direct dependents but a large transitive footprint — utilities
+depended upon by a few foundational packages that are themselves widely
+depended upon. These do not appear in star or direct-dependent rankings. The
+table filters to packages with at least 1,000 transitive dependents and sorts
+by the ratio.
+
+```{julia}
+#| output: asis
+hid = q(DS, """
+  SELECT ?name ?dir ?trans WHERE {
+    GRAPH ?g { ?s jl:forPackage ?pkg ; jl:directDependents ?dir ; jl:transitiveDependents ?trans . }
+    ?pkg rdfs:label ?name .
+    FILTER NOT EXISTS { ?pkg jl:isJLL true }
+  }""")
+hid.name = String.(hid.name); hid.dir = Int.(hid.dir); hid.trans = Int.(hid.trans)
+# floor the transitive reach so the ratio measures real infrastructure, not noise
+filter!(r -> r.trans >= 1000 && r.dir >= 1 && !isstdlib(r.name), hid)
+hid.ratio = hid.trans ./ hid.dir
+sort!(hid, :ratio, rev=true)
+lines = ["| Package | Direct | Transitive | Reach multiple |", "|:--|--:|--:|--:|"]
+for r in eachrow(first(hid, 12))
+    push!(lines, "| $(juliahub_link(r.name)) | $(fmt_int(r.dir)) | $(fmt_int(r.trans)) | $(fmt_int(r.ratio))× |")
+end
+println(join(lines, "\n"))
+```
+
+: Packages with few direct but many transitive dependents, ranked by ratio.
+Restricted to ≥ 1,000 transitive dependents. {.striped tbl-colwidths="[40,15,20,25]"}
+
+`DataValueInterfaces` is the extreme case: 2 direct dependents,
+`{julia} fmt_int(first(hid.trans))` transitive. Such packages are not
+identifiable from stars or direct-dependent counts; the ratio requires the
+full transitive closure.
+
+::: {.callout-tip appearance="minimal"}
+Source: registry dependency graph. "Reach multiple" is transitive ÷ direct
+dependents. The 1,000-transitive floor removes packages whose high ratio comes
+from a negligible footprint. JLL wrappers are excluded.
+:::
+
+# Contributor reach {#people}
+
+Joining commit-author data across all repositories gives, per contributor, the
+number of distinct packages they have committed to. The distribution is
+long-tailed; the highest-reach accounts appear below.
+
+```{julia}
+#| output: asis
+reach = q(DS, """
+  SELECT ?login (COUNT(DISTINCT ?pkg) AS ?n) WHERE {
+    ?pkg dcterms:contributor ?person . ?person foaf:nick ?login .
+    FILTER NOT EXISTS { ?pkg jl:isJLL true }
+  } GROUP BY ?login ORDER BY DESC(?n) LIMIT 20""")
+reach.login = String.(reach.login); reach.n = Int.(reach.n)
+lines = ["| # | Account | Packages contributed to |", "|--:|:--|--:|"]
+for (i, r) in enumerate(eachrow(reach))
+    push!(lines, "| $i | $(github_link(r.login)) | $(fmt_int(r.n)) |")
+end
+println(join(lines, "\n"))
+```
+
+: Accounts by number of distinct non-wrapper packages committed to. Automated
+and AI-authored accounts are included (see note). {.striped tbl-colwidths="[8,52,40]"}
+
+Reach measures the number of packages touched, not amount or significance of
+work. A single automated or one-line commit counts the same as sustained
+authorship, and the measure captures neither review, triage, documentation,
+nor design. High reach frequently reflects release-engineering and
+infrastructure roles (registry maintenance, the binary-build system, CI). A
+GitHub account is not necessarily one person (handle renames, shared or
+organizational accounts).
+
+::: {.callout-tip appearance="minimal"}
+Source: contributor lists from each package's GitHub repository, joined across
+the ecosystem. Automated and AI-authored accounts are shown as recorded — for
+example `claude` (Anthropic), which records commits authored by Claude Code.
+High-volume CI bots (`JuliaTagBot`, `CompatHelper`, `dependabot`, and similar)
+are filtered during data collection and are absent from the dataset entirely.
+:::
+
+# Inactivity among depended-upon packages {#fragile}
+
+Cross-referencing repository activity against dependent counts identifies
+packages that are archived or long inactive while retaining many dependents.
+The aggregate below is over the 500 most depended-upon independent packages.
+
+```{julia}
+#| output: asis
+pushed = Dict(String(r.name) => r.v for r in eachrow(snapmetric("lastPushedAt")))
+arch   = Set(String(r.name) for r in eachrow(snapmetric("isArchived")) if r.v == true)
+depmap = Dict(String(r.name) => Int(r.v) for r in eachrow(snapmetric("directDependents")))
+
+const INACTIVE_YEARS = 4
+cutoff = string(Date(SNAP_DATE) - Year(INACTIVE_YEARS))
+stale(name) = name in arch || (haskey(pushed, name) && string(pushed[name]) < cutoff)
+
+ranked = sort([(n, d) for (n, d) in depmap if !isstdlib(n) && !occursin("_jll", n)]; by=last, rev=true)
+top500 = first(ranked, 500)
+n_stale = count(x -> stale(x[1]), top500)
+println("Of the **500 most depended-upon** independent packages, ",
+        "**$n_stale** are archived or have no commit in the $INACTIVE_YEARS years ",
+        "preceding the snapshot.\n")
+```
+
+```{julia}
+#| output: asis
+rows = [(n, d, get(pushed, n, missing), n in arch) for (n, d) in top500 if stale(n)]
+sort!(rows, by = x -> x[2], rev = true)
+lines = ["| Package | Dependents | Last commit | |", "|:--|--:|:--|:--|"]
+for (n, d, p, a) in first(rows, 20)
+    when = a ? "—" : string(p)[1:min(10, length(string(p)))]
+    tag  = a ? "*archived*" : ""
+    push!(lines, "| $(juliahub_link(n)) | $(fmt_int(d)) | $when | $tag |")
+end
+println(join(lines, "\n"))
+```
+
+: Inactive packages (archived, or no commit in four years) among the 500 most
+depended-upon, ordered by dependent count. {.striped tbl-colwidths="[40,20,25,15]"}
+
+::: {.callout-tip appearance="minimal"}
+Source: GitHub push timestamps and archive flags × registry dependents. The
+push timestamp is repository-level, so a subpackage in an active monorepo may
+appear inactive or vice versa. Dependency edges are the latest registered
+version only.
+:::
+
+# The dependency-graph k-core {#shape}
+
+The k-core is the maximal subgraph in which every vertex has degree ≥ k, on the
+undirected dependency graph with JLL wrappers and standard libraries removed.
+`k` is set automatically to the smallest value whose k-core has at most a few
+hundred nodes, so the layout stays legible; the resulting `k` and node count
+are shown below the figure. Node size and color both encode PageRank. Hover for
+a name; click a node for its record.
+
+```{julia}
+#| output: asis
+prmax = maximum(n["pr"] for n in NET.nodes)
+embed_json("net", Dict("nodes"=>NET.nodes, "links"=>NET.links, "prmax"=>prmax, "k"=>NET.k))
+```
+
+::: {.column-page}
+<div id="net-viz" style="position:relative"></div>
+<div id="net-caption" style="text-align:center;color:#888;font-size:0.9rem;margin-top:0.3rem"></div>
+<div id="net-card"></div>
+:::
+
+<script>
+window.__viz = window.__viz || {};
+window.__viz.network = function () {
+  const net = window.__DATA_net;
+  const W = 900, H = 620;
+  const root = d3.select("#net-viz"); root.selectAll("*").remove();
+  const nodes = net.nodes.map(d => ({...d}));
+  const links = net.links.map(d => ({...d}));
+  const color = d3.scaleSequential(d3.interpolateInferno).domain([0, Math.sqrt(net.prmax)]);
+  const rscale = d3.scaleSqrt().domain([0, net.prmax]).range([2.5, 16]);
+  const svg = root.append("svg").attr("viewBox",[0,0,W,H])
+    .attr("style","max-width:100%;height:auto;font:10px system-ui;cursor:grab");
+  const tip = root.append("div").attr("style",
+    "position:absolute;pointer-events:none;background:#222;color:#fff;padding:4px 8px;border-radius:4px;font:11px system-ui;opacity:0;z-index:10");
+
+  const sim = d3.forceSimulation(nodes)
+    .force("link", d3.forceLink(links).distance(34).strength(0.35))
+    .force("charge", d3.forceManyBody().strength(-45))
+    .force("center", d3.forceCenter(W/2, H/2))
+    .force("collide", d3.forceCollide().radius(d=>rscale(d.pr)+1.5));
+
+  const link = svg.append("g").attr("stroke","#999").attr("stroke-opacity",0.25)
+    .selectAll("line").data(links).join("line");
+  const node = svg.append("g").attr("stroke","#fff").attr("stroke-width",0.5)
+    .selectAll("circle").data(nodes).join("circle")
+    .attr("r",d=>rscale(d.pr)).attr("fill",d=>color(Math.sqrt(d.pr)))
+    .style("cursor","pointer")
+    .on("mousemove",(e,d)=>tip.style("opacity",1)
+        .style("left",(e.offsetX+12)+"px").style("top",(e.offsetY-10)+"px")
+        .html(`<b>${d.name}</b><br>${d.dependents} direct dependents`))
+    .on("mouseleave",()=>tip.style("opacity",0))
+    .on("click",(e,d)=>{
+      document.getElementById("net-card").innerHTML =
+        window.packageCard(window.__pkgByName.get(d.name));
+    });
+
+  node.call(d3.drag()
+    .on("start",(e,d)=>{if(!e.active)sim.alphaTarget(0.3).restart();d.fx=d.x;d.fy=d.y;})
+    .on("drag",(e,d)=>{d.fx=e.x;d.fy=e.y;})
+    .on("end",(e,d)=>{if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null;}));
+
+  sim.on("tick",()=>{
+    link.attr("x1",d=>d.source.x).attr("y1",d=>d.source.y)
+        .attr("x2",d=>d.target.x).attr("y2",d=>d.target.y);
+    node.attr("cx",d=>d.x).attr("cy",d=>d.y);
+  });
+  // settle then freeze so it doesn't spin forever
+  for (let i=0;i<320;i++) sim.tick();
+  // crop the viewBox to the settled node cloud so there is no dead margin
+  const rr = nodes.map(d=>rscale(d.pr)), pad = 12;
+  const minX = Math.min(...nodes.map((d,i)=>d.x-rr[i])) - pad;
+  const maxX = Math.max(...nodes.map((d,i)=>d.x+rr[i])) + pad;
+  const minY = Math.min(...nodes.map((d,i)=>d.y-rr[i])) - pad;
+  const maxY = Math.max(...nodes.map((d,i)=>d.y+rr[i])) + pad;
+  svg.attr("viewBox",[minX, minY, maxX-minX, maxY-minY]);
+  document.getElementById("net-caption").innerHTML =
+    `The core has <b>${net.nodes.length}</b> packages (k = ${net.k}). Click a node to inspect it.`;
+};
+</script>
+
+::: {.callout-tip appearance="minimal"}
+Source: registry dependency graph, restricted to its k-core. Node color and
+size encode PageRank. Label propagation on this subgraph does not resolve
+distinct communities: the core is densely interconnected rather than partitioned
+into separable clusters.
+:::
+
+# Package explorer {#explorer}
+
+Per-package record for any of the `{julia} fmt_int(n_pkg)` packages:
+dependencies, dependents, contributors, and **dependency-tree authors** — the
+number of distinct commit-author accounts across the package together with its
+full transitive dependency tree (that is, every account whose code is pulled in
+when the package is installed).
+
+```{julia}
+#| output: asis
+embed_json("pkgindex", IDX)
+```
+
+<div id="explorer">
+  <input id="pkg-search" type="search" placeholder="Search packages by name…"
+    style="width:100%;max-width:420px;padding:0.5rem 0.7rem;font-size:1rem;border:1px solid #ccc;border-radius:6px" autocomplete="off">
+  <div id="pkg-results" style="margin:0.4rem 0"></div>
+  <div id="pkg-card"></div>
+</div>
+
+<script>
+window.__viz = window.__viz || {};
+// Shared package-detail card — used by both the explorer and the network graph.
+window.packageCard = function (rec) {
+  if (!rec) return "<em>Package not found.</em>";
+  const fmt = n => (n===null||n===undefined) ? "—" : n.toLocaleString();
+  const jh = n => `<a href="https://juliahub.com/ui/Packages/General/${n}" target="_blank" style="text-decoration:none"><code>${n}</code></a>`;
+  const gh = l => `<a href="https://github.com/${l}" target="_blank">${l}</a>`;
+  const st = (label,val) => `<div style="min-width:110px"><div style="font-size:1.5rem;font-weight:700">${val}</div><div style="color:#888;font-size:0.82rem">${label}</div></div>`;
+  const chips = arr => arr.length===0 ? '<span style="color:#999">none</span>'
+    : arr.map(n=>`<span style="display:inline-block;margin:2px">${jh(n)}</span>`).join("");
+  const contribs = rec.top_contributors.length===0 ? '<span style="color:#999">none recorded</span>'
+    : "<ol style='margin:0.3rem 0 0 1.2rem'>" + rec.top_contributors.map(c=>`<li>${gh(c.login)} — ${c.commits.toLocaleString()} commits</li>`).join("") + "</ol>";
+  return `<div style="border:1px solid #ddd;border-radius:10px;padding:1.2rem 1.4rem;margin:0.6rem 0">
+    <h3 style="margin:0 0 0.2rem">${jh(rec.name)} ${rec.isstdlib?'<span style="font-size:0.7rem;color:#888">(ships with Julia)</span>':''}</h3>
+    <div style="color:#888;margin-bottom:0.8rem">v${rec.version??"—"} · ${rec.license??"license not detected"}</div>
+    <div style="display:flex;gap:1.4rem;flex-wrap:wrap;margin-bottom:1rem">
+      ${st("stars",fmt(rec.stars))}${st("direct dependents",fmt(rec.dependents))}${st("transitive dependents",fmt(rec.transitive))}${st("monthly requests",fmt(rec.requests))}${st("contributors",fmt(rec.contributors))}${st("dependency-tree authors",fmt(rec.trust))}</div>
+    <details open><summary style="cursor:pointer;font-weight:600">Depends on (${rec.ndeps})</summary>
+      <div style="margin:0.4rem 0">${chips(rec.deps)}${rec.ndeps>rec.deps.length?`<span style="color:#999"> +${rec.ndeps-rec.deps.length} more</span>`:''}</div></details>
+    <details><summary style="cursor:pointer;font-weight:600">Depended on by</summary>
+      <div style="margin:0.4rem 0">${chips(rec.dependents_list)}${rec.dependents>rec.dependents_list.length?`<span style="color:#999"> +${rec.dependents-rec.dependents_list.length} more</span>`:''}</div></details>
+    <details><summary style="cursor:pointer;font-weight:600">Top contributors</summary>
+      <div style="margin:0.4rem 0">${contribs}</div></details>
+  </div>`;
+};
+
+window.__viz.explorer = function () {
+  const idx = window.__DATA_pkgindex;
+  window.__pkgByName = new Map(idx.map(d => [d.name, d]));
+  const input = document.getElementById("pkg-search");
+  const results = document.getElementById("pkg-results");
+  const card = document.getElementById("pkg-card");
+  const show = name => { card.innerHTML = window.packageCard(window.__pkgByName.get(name)); };
+  input.addEventListener("input", () => {
+    const qy = input.value.trim().toLowerCase();
+    if (!qy) { results.innerHTML = ""; return; }
+    const hits = idx.filter(d => d.name.toLowerCase().includes(qy))
+      .sort((a,b)=>(b.dependents||0)-(a.dependents||0)).slice(0,12);
+    results.innerHTML = hits.map(d =>
+      `<button class="pkg-hit" data-name="${d.name}" style="display:block;width:100%;max-width:420px;text-align:left;padding:0.35rem 0.6rem;margin:2px 0;border:1px solid #eee;border-radius:5px;background:var(--bs-body-bg,#fff);cursor:pointer">
+        <b>${d.name}</b> <span style="color:#888;font-size:0.85rem">· ${(d.dependents||0).toLocaleString()} dependents · ${(d.trust||0).toLocaleString()} tree authors</span></button>`).join("");
+    results.querySelectorAll(".pkg-hit").forEach(b =>
+      b.addEventListener("click", () => show(b.dataset.name)));
+  });
+  // preload an interesting example
+  show("Makie");
+};
+</script>
+
+::: {.callout-tip appearance="minimal"}
+Source: registry + GitHub, combined. "Monthly requests" is package-server
+request volume (juliapkgstats.com) and includes CI traffic — read it as
+install demand, not distinct users. "Dependency-tree authors" counts distinct
+commit-author accounts across the package and its transitive dependency
+closure; high-volume CI bots are filtered during collection.
+:::
+
+<!-- Boot all interactive figures once the DOM and vendored D3 are ready. -->
+<script>
+(function () {
+  function boot() {
+    if (!window.d3) { setTimeout(boot, 50); return; }
+    try { window.__viz.scatter(); } catch(e){ console.error("scatter", e); }
+    try { window.__viz.network(); } catch(e){ console.error("network", e); }
+    try { window.__viz.explorer(); } catch(e){ console.error("explorer", e); }
+  }
+  if (document.readyState === "loading")
+    document.addEventListener("DOMContentLoaded", boot);
+  else boot();
+})();
+</script>
+
+# Methods & limitations {#methods}
+
+The dataset is produced by a single reproducible pipeline and is contained in
+one file. The following affect interpretation of the figures above:
+
+- All figures reflect a single crawl on `{julia} SNAP_HUMAN`.
+- **Repository-level vs package-level.** Stars, forks, issue counts, commit
+  counts, and contributor lists describe *repositories*. Packages sharing a
+  monorepo share these numbers; a subpackage can look more active or popular
+  than its own code is.
+- **"Requests" are not downloads or users.** Package-server request counts
+  include continuous-integration traffic and mirror activity.
+- **Commits are a weak proxy for contribution.** They omit review, triage,
+  documentation, and design, and vary with squash-vs-merge habits. Named
+  contributor rankings reflect commit reach, nothing finer.
+- **Identity is a GitHub account.** Handle renames, shared/organizational
+  accounts, and multiple accounts blur person-level counts. Bots are filtered
+  by a best-effort list plus automated/AI accounts; some will slip through.
+- **Dependency edges are latest-version hard dependencies between packages
+  registered in General.** Weak/extension dependencies and historical
+  dependency changes are not modeled. Standard-library coverage is partial:
+  `{julia} n_stdlib_reg` of Julia's `{julia} n_stdlib` standard libraries are
+  separately registered in General — the independently-versioned ones
+  (`Statistics`, `TOML`, `Artifacts`, the `*_jll` binaries, …) — and so are
+  graph nodes; the remaining `{julia} n_stdlib - n_stdlib_reg` (`LinearAlgebra`,
+  `Random`, `Printf`, `Dates`, …) are not registry entries, so neither they nor
+  dependencies on them appear. Because this coverage is partial, standard
+  libraries are excluded from the ranked figures; counts for other packages are
+  unaffected, since standard libraries are dependency sinks.
+- **Coverage gaps.** Licenses were detected for ~66% of packages (GitHub
+  reports none for the rest); GitHub metadata is missing for the few packages
+  not hosted there.
+
+The underlying dataset is a **knowledge graph** of
+`{julia} fmt_int(Int(ntriples(DS)))` *triples*. A triple is the smallest unit
+of the graph: a single fact written as *subject – predicate – object*, such as
+*DataFrames → depends on → Tables* or *Flux → has contributor → CarloLucibello*.
+Dependency edges, contributor links, star counts, licenses, download figures,
+and every other attribute used above are each stored as one or more triples.
+Together they describe `{julia} fmt_int(n_pkg)` packages as a single queryable
+graph, and every figure on this page is computed from it directly.
+
+This subject–predicate–object model is **RDF** (the Resource Description
+Framework), a long-standing W3C standard for representing data as a graph.
+Its defining feature here is that each package, person, and license is named by
+a URL rather than an internal identifier — the package nodes are JuliaHub
+pages, the people are GitHub profiles, the licenses are SPDX entries. Records
+that share an identifier can therefore be joined across independently produced
+datasets without a prearranged schema, which is the property usually meant by
+"linked data." The full dataset is a single file and can be queried or combined
+with other sources directly.
+
+::: {.callout-note appearance="minimal"}
+**Explore it yourself.** The whole graph runs in your browser at
+[the SPARQL explorer](https://mthelm85.github.io/JuliaEcosystemGraph/) — no server,
+no sign-up. Pick an example query or write your own; every result links back to
+the JuliaHub, GitHub, and SPDX pages it came from.
+:::
