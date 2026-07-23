@@ -12,8 +12,8 @@ Built on [RDF.jl](https://github.com/mthelm85/RDF.jl).
 
 | | |
 |---|---|
-| **Live SPARQL explorer** | Query the whole graph in your browser — [mthelm85.github.io/JuliaEcosystemGraph](https://mthelm85.github.io/JuliaEcosystemGraph/) |
-| **Analytical report** | [`notebook/`](notebook/) — an interactive Quarto notebook of ecosystem findings |
+| **Read the report** | The ecosystem findings, with interactive figures — [mthelm85.github.io/JuliaEcosystemGraph](https://mthelm85.github.io/JuliaEcosystemGraph/) |
+| **Query it live** | Browser SPARQL explorer over the whole graph — [/explorer.html](https://mthelm85.github.io/JuliaEcosystemGraph/explorer.html) |
 | **The dataset** | `julia_ecosystem.nq` — one N-Quads file, ~864k triples over ~14k packages |
 | **Example queries** | [`queries/showcase.md`](queries/showcase.md) — a tour of what the graph can answer |
 

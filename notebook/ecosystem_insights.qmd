@@ -580,7 +580,7 @@ with other sources directly.
 
 ::: {.callout-note appearance="minimal"}
 **Explore it yourself.** The whole graph runs in your browser at
-[the SPARQL explorer](https://mthelm85.github.io/JuliaEcosystemGraph/) — no server,
+[the SPARQL explorer](https://mthelm85.github.io/JuliaEcosystemGraph/explorer.html) — no server,
 no sign-up. Pick an example query or write your own; every result links back to
 the JuliaHub, GitHub, and SPDX pages it came from.
 :::

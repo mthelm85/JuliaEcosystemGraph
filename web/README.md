@@ -1,16 +1,21 @@
-# Web explorer
+# Web site (report + explorer)
 
-A fully client-side SPARQL explorer for `julia_ecosystem.nq`. Everything runs
-in the browser via [Oxigraph](https://github.com/oxigraph/oxigraph) compiled to
-WebAssembly — no server, no backend, no data leaves the page.
+The published GitHub Pages site: the analytical report as the landing page,
+linking to a fully client-side SPARQL explorer for `julia_ecosystem.nq`. The
+explorer runs in the browser via [Oxigraph](https://github.com/oxigraph/oxigraph)
+compiled to WebAssembly — no server, no backend, no data leaves the page.
 
 ## Contents
 
 | File | What it is |
 |------|------------|
-| `index.html` | The query UI (example queries, editor, results table) |
+| `index.html` | The report (rendered from [`../notebook/ecosystem_insights.qmd`](../notebook)) — the landing page |
+| `explorer.html` | The SPARQL query UI (example queries, editor, results table) |
 | `web.js`, `web_bg.wasm` | Vendored Oxigraph WASM build (v0.5.9) — no CDN |
 | `data.nq.gz` | The dataset, gzipped (~7 MB; ~140 MB / 864k triples uncompressed) |
+
+`index.html` is a copy of the rendered notebook; after re-rendering the report,
+refresh it with `cp notebook/ecosystem_insights.html web/index.html`.
 
 ## How it works
 

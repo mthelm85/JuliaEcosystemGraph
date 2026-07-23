@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Julia ecosystem graph — SPARQL explorer</title>
+<style>
+  :root { --bg:#fff; --fg:#1a1a1a; --muted:#6a6a6a; --line:#e2e2e2; --accent:#2b6cb0; --code:#f6f8fa; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f1115; --fg:#e6e6e6; --muted:#9aa0a6; --line:#2a2e37; --accent:#6ea8fe; --code:#161a22; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  .wrap { max-width:1100px; margin:0 auto; padding:1.5rem 1.2rem 4rem; }
+  h1 { font-size:1.5rem; margin:0 0 .2rem; }
+  .sub { color:var(--muted); margin:0 0 1.2rem; }
+  .controls { display:flex; gap:.6rem; flex-wrap:wrap; align-items:center; margin:.6rem 0; }
+  select, button { font:inherit; padding:.5rem .7rem; border:1px solid var(--line);
+                   border-radius:7px; background:var(--bg); color:var(--fg); }
+  button.run { background:var(--accent); color:#fff; border-color:transparent; cursor:pointer; font-weight:600; }
+  button.run:disabled { opacity:.5; cursor:default; }
+  textarea { width:100%; min-height:170px; font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+             padding:.8rem; border:1px solid var(--line); border-radius:8px; background:var(--code);
+             color:var(--fg); resize:vertical; }
+  .status { color:var(--muted); font-size:.9rem; margin:.5rem 0; min-height:1.2em; }
+  .err { color:#c0392b; white-space:pre-wrap; font:13px ui-monospace,monospace; }
+  table { border-collapse:collapse; width:100%; font-size:13.5px; margin-top:.6rem; }
+  th,td { text-align:left; padding:.4rem .6rem; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { position:sticky; top:0; background:var(--bg); border-bottom:2px solid var(--line); }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  a { color:var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  .lit { color:var(--fg); }
+  .results-wrap { overflow-x:auto; border:1px solid var(--line); border-radius:8px; margin-top:.4rem; }
+  .foot { color:var(--muted); font-size:.85rem; margin-top:2rem; border-top:1px solid var(--line); padding-top:1rem; }
+  code { background:var(--code); padding:.1em .35em; border-radius:4px; font-size:.9em; }
+  .spinner { display:inline-block; width:14px; height:14px; border:2px solid var(--line);
+             border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite;
+             vertical-align:-2px; margin-right:.4rem; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p style="margin:0 0 1rem"><a href="./">&larr; Read the report</a></p>
+  <h1>The Julia package ecosystem, as a graph</h1>
+  <p class="sub">Every registered package, its dependencies, GitHub metadata, and commit
+  authors — one queryable RDF dataset. Runs entirely in your browser; nothing is sent anywhere.</p>
+
+  <div id="loadstatus" class="status"><span class="spinner"></span>Loading the graph (one-time, ~4&nbsp;s)…</div>
+
+  <div class="controls">
+    <label>Example:
+      <select id="examples" disabled></select>
+    </label>
+    <button class="run" id="run" disabled>Run&nbsp;query</button>
+    <span class="status" id="runstatus" style="margin:0"></span>
+  </div>
+
+  <textarea id="query" spellcheck="false" placeholder="Loading…"></textarea>
+
+  <div id="error" class="err"></div>
+  <div class="results-wrap" id="resultswrap" style="display:none">
+    <table id="results"><thead></thead><tbody></tbody></table>
+  </div>
+
+  <div class="foot">
+    <p>Identifiers are real URLs — package nodes are JuliaHub pages, people are GitHub
+    profiles, licenses are SPDX entries — so results below are clickable. The full dataset is a
+    single N-Quads file (<span id="triplecount">…</span> triples) built by an open pipeline.
+    Prefixes <code>jl:</code>, <code>rdfs:</code>, <code>dcterms:</code>, <code>foaf:</code>,
+    <code>sdo:</code>, <code>xsd:</code> are predeclared.</p>
+  </div>
+</div>
+
+<script type="module">
+import init, { Store } from './web.js';
+
+const PROLOGUE = `PREFIX jl: <https://julia-ecosystem.org/ns/>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX dcterms: <http://purl.org/dc/terms/>
+PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+PREFIX sdo: <https://schema.org/>
+PREFIX schema: <https://schema.org/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+`;
+
+const EXAMPLES = [
+  ["Most load-bearing packages (transitive dependents)", `SELECT ?name ?direct ?transitive WHERE {
+  GRAPH ?g { ?s jl:forPackage ?pkg ; jl:directDependents ?direct ; jl:transitiveDependents ?transitive . }
+  ?pkg rdfs:label ?name .
+  FILTER NOT EXISTS { ?pkg jl:isJLL true }
+  FILTER NOT EXISTS { ?pkg jl:isStdlib true }
+} ORDER BY DESC(?transitive) LIMIT 25`],
+
+  ["Underrated infrastructure (high PageRank, few stars)", `SELECT ?name ?pagerank ?stars WHERE {
+  GRAPH ?g { ?s jl:forPackage ?pkg ; jl:pagerank ?pagerank ; jl:stars ?stars . }
+  ?pkg rdfs:label ?name .
+  FILTER(?stars < 100)
+  FILTER NOT EXISTS { ?pkg jl:isJLL true }
+  FILTER NOT EXISTS { ?pkg jl:isStdlib true }
+} ORDER BY DESC(?pagerank) LIMIT 25`],
+
+  ["Hidden infrastructure (transitive ÷ direct ratio)", `SELECT ?name ?direct ?transitive WHERE {
+  GRAPH ?g { ?s jl:forPackage ?pkg ; jl:directDependents ?direct ; jl:transitiveDependents ?transitive . }
+  ?pkg rdfs:label ?name .
+  FILTER(?transitive >= 1000 && ?direct >= 1)
+  FILTER NOT EXISTS { ?pkg jl:isJLL true }
+  FILTER NOT EXISTS { ?pkg jl:isStdlib true }
+} ORDER BY DESC(?transitive / ?direct) LIMIT 25`],
+
+  ["Most far-reaching contributors", `SELECT ?login (COUNT(DISTINCT ?pkg) AS ?packages) WHERE {
+  ?pkg dcterms:contributor ?person .
+  ?person foaf:nick ?login .
+  FILTER NOT EXISTS { ?pkg jl:isJLL true }
+} GROUP BY ?login ORDER BY DESC(?packages) LIMIT 25`],
+
+  ["Dependency-tree authors of a package (property path)", `# Everyone whose code you pull in when you ] add Makie —
+# distinct commit authors across its whole transitive dependency tree.
+SELECT (COUNT(DISTINCT ?person) AS ?authors) WHERE {
+  <https://juliahub.com/ui/Packages/General/Makie> jl:dependsOn* ?dep .
+  ?dep dcterms:contributor ?person .
+}`],
+
+  ["Top committers to a package (RDF-star commit weights)", `SELECT ?login ?commits WHERE {
+  ?r rdf:reifies <<( <https://juliahub.com/ui/Packages/General/DataFrames> dcterms:contributor ?person )>> .
+  ?r jl:commits ?commits .
+  ?person foaf:nick ?login .
+} ORDER BY DESC(?commits) LIMIT 15`],
+
+  ["Organization league table (stars, repo-deduped)", `SELECT ?owner (SUM(?repoStars) AS ?totalStars) (COUNT(?repo) AS ?repos) WHERE {
+  {
+    SELECT ?owner ?repo (MAX(?stars) AS ?repoStars) WHERE {
+      ?pkg jl:owner ?owner ; sdo:codeRepository ?repo .
+      GRAPH ?g { ?s jl:forPackage ?pkg ; jl:stars ?stars . }
+    } GROUP BY ?owner ?repo
+  }
+} GROUP BY ?owner ORDER BY DESC(?totalStars) LIMIT 25`],
+
+  ["Quiet workhorses (many requests, few stars)", `SELECT ?name ?requests ?stars WHERE {
+  GRAPH ?g { ?s jl:forPackage ?pkg ; jl:monthlyDownloads ?requests ; jl:stars ?stars . }
+  ?pkg rdfs:label ?name .
+  FILTER(?stars < 50 && ?requests > 100000)
+  FILTER NOT EXISTS { ?pkg jl:isJLL true }
+  FILTER NOT EXISTS { ?pkg jl:isStdlib true }
+} ORDER BY DESC(?requests) LIMIT 25`],
+
+  ["Topics that co-occur with #machine-learning", `SELECT ?topic (COUNT(?pkg) AS ?n) WHERE {
+  ?pkg dcterms:subject <https://github.com/topics/machine-learning> ;
+       dcterms:subject ?topic .
+  FILTER(?topic != <https://github.com/topics/machine-learning>)
+} GROUP BY ?topic ORDER BY DESC(?n) LIMIT 20`],
+
+  ["Everything known about one package", `SELECT ?predicate ?object WHERE {
+  <https://juliahub.com/ui/Packages/General/DataFrames> ?predicate ?object .
+} LIMIT 100`],
+];
+
+const SHORTEN = [
+  ["https://juliahub.com/ui/Packages/General/", ""],
+  ["https://github.com/topics/", "#"],
+  ["https://github.com/", ""],
+  ["https://spdx.org/licenses/", ""],
+  ["https://julia-ecosystem.org/ns/", "jl:"],
+  ["http://purl.org/dc/terms/", "dcterms:"],
+  ["http://xmlns.com/foaf/0.1/", "foaf:"],
+  ["https://schema.org/", "sdo:"],
+  ["http://www.w3.org/2000/01/rdf-schema#", "rdfs:"],
+  ["http://www.w3.org/1999/02/22-rdf-syntax-ns#", "rdf:"],
+];
+function shorten(iri) {
+  for (const [pre, rep] of SHORTEN) if (iri.startsWith(pre)) return rep + iri.slice(pre.length);
+  return iri;
+}
+const NUMERIC = /XMLSchema#(integer|decimal|double|float|long|int)/;
+
+const $ = id => document.getElementById(id);
+let store = null;
+
+function renderTerm(t) {
+  if (!t) return "";
+  if (t.termType === "NamedNode")
+    return `<a href="${t.value}" target="_blank" rel="noopener">${shorten(t.value)}</a>`;
+  if (t.termType === "BlankNode") return `_:${t.value}`;
+  const num = t.datatype && NUMERIC.test(t.datatype.value);
+  const v = num && !isNaN(+t.value) ? Number(t.value).toLocaleString() : t.value;
+  return `<span class="lit"${num ? ' data-num="1"' : ''}>${escapeHtml(v)}</span>`;
+}
+function escapeHtml(s){ return String(s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+function runQuery() {
+  const raw = $("query").value.trim();
+  if (!raw || !store) return;
+  $("error").textContent = "";
+  $("runstatus").innerHTML = '<span class="spinner"></span>running…';
+  // defer so the spinner paints before the (blocking) query
+  setTimeout(() => {
+    try {
+      const t0 = performance.now();
+      const res = store.query(PROLOGUE + "\n" + raw);
+      const rows = [...res];
+      const ms = Math.round(performance.now() - t0);
+      // union of column names, in first-seen order
+      const cols = [];
+      for (const b of rows) for (const [k] of b) if (!cols.includes(k)) cols.push(k);
+      const thead = $("results").querySelector("thead");
+      const tbody = $("results").querySelector("tbody");
+      thead.innerHTML = "<tr>" + cols.map(c=>`<th>${escapeHtml(c)}</th>`).join("") + "</tr>";
+      tbody.innerHTML = rows.map(b => "<tr>" + cols.map(c=>{
+        const t = b.get(c);
+        const num = t && t.termType==="Literal" && t.datatype && NUMERIC.test(t.datatype.value);
+        return `<td class="${num?'num':''}">${renderTerm(t)}</td>`;
+      }).join("") + "</tr>").join("");
+      $("resultswrap").style.display = rows.length ? "block" : "block";
+      $("runstatus").textContent = `${rows.length} row${rows.length===1?'':'s'} · ${ms} ms`;
+      if (!rows.length) tbody.innerHTML = `<tr><td style="color:var(--muted)">no results</td></tr>`;
+    } catch (e) {
+      $("resultswrap").style.display = "none";
+      $("error").textContent = String(e.message || e);
+      $("runstatus").textContent = "";
+    }
+  }, 20);
+}
+
+(async () => {
+  await init();
+  const resp = await fetch("data.nq.gz");
+  const text = await new Response(resp.body.pipeThrough(new DecompressionStream("gzip"))).text();
+  store = new Store();
+  store.load(text, { format: "application/n-quads", no_transaction: true, unchecked: true, lenient: true });
+
+  $("triplecount").textContent = store.size.toLocaleString();
+  $("loadstatus").innerHTML = `Graph loaded — <b>${store.size.toLocaleString()}</b> triples ready to query.`;
+
+  const sel = $("examples");
+  EXAMPLES.forEach(([name], i) => {
+    const o = document.createElement("option"); o.value = i; o.textContent = name; sel.appendChild(o);
+  });
+  const setExample = i => { $("query").value = EXAMPLES[i][1]; };
+  setExample(0);
+  sel.disabled = false; $("run").disabled = false;
+  sel.addEventListener("change", () => setExample(+sel.value));
+  $("run").addEventListener("click", runQuery);
+  $("query").addEventListener("keydown", e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); runQuery(); }
+  });
+  runQuery();   // show the first example's results immediately
+})().catch(e => { $("loadstatus").innerHTML = `<span class="err">Failed to load: ${e}</span>`; });
+</script>
+</body>
+</html>
