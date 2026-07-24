@@ -61,6 +61,13 @@ its GitHub repository metadata, and its commit authors. Construction and known
 limitations are described in [Methods & limitations](#methods).
 :::
 
+# Explore it yourself {#explore}
+
+The whole graph is queryable, live, in your browser — open the
+[**SPARQL explorer**](https://mthelm85.github.io/JuliaEcosystemGraph/explorer.html)
+to ask your own questions of it at any point. The rest of this page walks
+through some of what it can show.
+
 # Registry totals
 
 ```{julia}
@@ -579,8 +586,7 @@ datasets without a prearranged schema, which is the property usually meant by
 with other sources directly.
 
 ::: {.callout-note appearance="minimal"}
-**Explore it yourself.** The whole graph runs in your browser at
-[the SPARQL explorer](https://mthelm85.github.io/JuliaEcosystemGraph/explorer.html) — no server,
-no sign-up. Pick an example query or write your own; every result links back to
-the JuliaHub, GitHub, and SPDX pages it came from.
+**Now go ask your own questions.** The whole graph is in the
+[SPARQL explorer](https://mthelm85.github.io/JuliaEcosystemGraph/explorer.html) —
+pick an example query or write your own.
 :::

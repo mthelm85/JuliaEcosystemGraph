@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Julia ecosystem graph — SPARQL explorer</title>
+<link rel="stylesheet" href="cm/codemirror.css">
+<link rel="stylesheet" href="cm/material-darker.css">
+<script src="cm/codemirror.js"></script>
+<script src="cm/sparql.js"></script>
 <style>
   :root { --bg:#fff; --fg:#1a1a1a; --muted:#6a6a6a; --line:#e2e2e2; --accent:#2b6cb0; --code:#f6f8fa; }
   @media (prefers-color-scheme: dark) {
@@ -39,6 +43,10 @@
              border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite;
              vertical-align:-2px; margin-right:.4rem; }
   @keyframes spin { to { transform:rotate(360deg); } }
+  /* SPARQL editor (CodeMirror) — sizing/chrome; colors come from the theme */
+  .CodeMirror { height:auto; min-height:190px; border:1px solid var(--line); border-radius:8px;
+                font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .CodeMirror-scroll { min-height:190px; }
 </style>
 </head>
 <body>
@@ -67,7 +75,8 @@
 
   <div class="foot">
     <p>Identifiers are real URLs — package nodes are JuliaHub pages, people are GitHub
-    profiles, licenses are SPDX entries — so results below are clickable. The full dataset is a
+    profiles, licenses are SPDX entries — so any IRI in your results is a clickable link
+    (literals like counts and names are plain text). The full dataset is a
     single N-Quads file (<span id="triplecount">…</span> triples) built by an open pipeline.
     Prefixes <code>jl:</code>, <code>rdfs:</code>, <code>dcterms:</code>, <code>foaf:</code>,
     <code>sdo:</code>, <code>xsd:</code> are predeclared.</p>
@@ -178,6 +187,7 @@ const NUMERIC = /XMLSchema#(integer|decimal|double|float|long|int)/;
 
 const $ = id => document.getElementById(id);
 let store = null;
+let editor = null;
 
 function renderTerm(t) {
   if (!t) return "";
@@ -191,7 +201,7 @@ function renderTerm(t) {
 function escapeHtml(s){ return String(s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 
 function runQuery() {
-  const raw = $("query").value.trim();
+  const raw = (editor ? editor.getValue() : "").trim();
   if (!raw || !store) return;
   $("error").textContent = "";
   $("runstatus").innerHTML = '<span class="spinner"></span>running…';
@@ -224,6 +234,16 @@ function runQuery() {
   }, 20);
 }
 
+// SPARQL editor with syntax highlighting (upgrades the textarea in place).
+editor = CodeMirror.fromTextArea($("query"), {
+  mode: "application/sparql-query",
+  lineNumbers: true,
+  lineWrapping: true,
+  theme: matchMedia("(prefers-color-scheme: dark)").matches ? "material-darker" : "default",
+  extraKeys: { "Ctrl-Enter": () => runQuery(), "Cmd-Enter": () => runQuery() },
+});
+editor.setValue(EXAMPLES[0][1]);
+
 (async () => {
   await init();
   const resp = await fetch("data.nq.gz");
@@ -238,14 +258,10 @@ function runQuery() {
   EXAMPLES.forEach(([name], i) => {
     const o = document.createElement("option"); o.value = i; o.textContent = name; sel.appendChild(o);
   });
-  const setExample = i => { $("query").value = EXAMPLES[i][1]; };
-  setExample(0);
+  const setExample = i => { editor.setValue(EXAMPLES[i][1]); };
   sel.disabled = false; $("run").disabled = false;
   sel.addEventListener("change", () => setExample(+sel.value));
   $("run").addEventListener("click", runQuery);
-  $("query").addEventListener("keydown", e => {
-    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); runQuery(); }
-  });
   runQuery();   // show the first example's results immediately
 })().catch(e => { $("loadstatus").innerHTML = `<span class="err">Failed to load: ${e}</span>`; });
 </script>

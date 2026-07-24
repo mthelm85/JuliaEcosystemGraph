@@ -12,6 +12,7 @@ compiled to WebAssembly — no server, no backend, no data leaves the page.
 | `index.html` | The report (rendered from [`../notebook/ecosystem_insights.qmd`](../notebook)) — the landing page |
 | `explorer.html` | The SPARQL query UI (example queries, editor, results table) |
 | `web.js`, `web_bg.wasm` | Vendored Oxigraph WASM build (v0.5.9) — no CDN |
+| `cm/` | Vendored CodeMirror 5 + SPARQL mode (editor syntax highlighting) |
 | `data.nq.gz` | The dataset, gzipped (~7 MB; ~140 MB / 864k triples uncompressed) |
 
 `index.html` is a copy of the rendered notebook; after re-rendering the report,
