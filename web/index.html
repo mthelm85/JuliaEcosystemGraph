@@ -2850,7 +2850,7 @@ window.__viz.network = function () {
   const color = d3.scaleSequential(d3.interpolateInferno).domain([0, Math.sqrt(net.prmax)]);
   const rscale = d3.scaleSqrt().domain([0, net.prmax]).range([2.5, 16]);
   const svg = root.append("svg").attr("viewBox",[0,0,W,H])
-    .attr("style","max-width:100%;height:auto;font:10px system-ui;cursor:grab");
+    .attr("style","width:100%;max-width:720px;height:auto;display:block;margin:0 auto;font:10px system-ui;cursor:grab");
   const tip = root.append("div").attr("style",
     "position:absolute;pointer-events:none;background:#222;color:#fff;padding:4px 8px;border-radius:4px;font:11px system-ui;opacity:0;z-index:10");
 
@@ -2919,9 +2919,9 @@ window.__viz.network = function () {
     link.attr("stroke-opacity", l => (l.source === d || l.target === d) ? 0.85 : 0.02)
         .attr("stroke", l => (l.source === d || l.target === d) ? "#444" : "#999");
     labelG.selectAll("text").data([...set], n => n.id).join("text")
-      .attr("x", n => n.x + rscale(n.pr) + 2).attr("y", n => n.y + 3)
-      .attr("font-size", n => n === d ? 12 : 10).attr("font-weight", n => n === d ? 700 : 400)
-      .attr("fill", "#1a1a1a").attr("paint-order", "stroke").attr("stroke", "#fff").attr("stroke-width", 3)
+      .attr("x", n => n.x + rscale(n.pr) + 1.5).attr("y", n => n.y + 2)
+      .attr("font-size", n => n === d ? 7 : 5).attr("font-weight", n => n === d ? 700 : 400)
+      .attr("fill", "#1a1a1a").attr("paint-order", "stroke").attr("stroke", "#fff").attr("stroke-width", 1.2)
       .text(n => n.name);
     const deg = nbr.get(d).size;
     document.getElementById("net-caption").innerHTML =
