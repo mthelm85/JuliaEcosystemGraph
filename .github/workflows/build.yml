@@ -1,0 +1,103 @@
+name: Rebuild ecosystem graph
+
+# Runs the full pipeline end-to-end: crawl → build graph → render notebook →
+# compress snapshot → commit.  The push to main then triggers the Pages
+# workflow, so the site updates automatically.
+#
+# Usage: Actions → "Rebuild ecosystem graph" → Run workflow
+#
+# To add a nightly schedule, uncomment the cron line below.
+#
+# Requires a repository secret named GH_API_TOKEN — a fine-grained PAT with:
+#   • Contents: read/write (push the updated data)
+#   • Public repositories: read (pipeline API calls)
+# The built-in GITHUB_TOKEN has stricter secondary rate limits that stretch the
+# contributor crawl well past the 6-hour job timeout, and pushes made with it
+# don't trigger other workflows (so the Pages deploy wouldn't fire).
+
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: '0 6 * * 0'   # weekly, Sunday 06:00 UTC
+
+permissions:
+  contents: write          # push the updated data back to the repo
+
+concurrency:
+  group: build-graph
+  cancel-in-progress: false  # let a long run finish
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 420    # 7 hours — the contributor crawl takes ~5h
+
+    steps:
+      # Use the PAT for checkout so that the push at the end authenticates
+      # as you — pushes from the default GITHUB_TOKEN don't trigger other
+      # workflows, which would prevent the Pages deploy from firing.
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_API_TOKEN }}
+
+      # ── Julia ──────────────────────────────────────────────────────────
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+
+      - uses: julia-actions/cache@v2
+
+      # Install the project deps plus the extras the notebook needs
+      # (DataFrames, Statistics) and IJulia for kernel registration.
+      # These modify Project.toml on disk but we only commit web/ files.
+      - name: Install dependencies
+        run: |
+          julia --project -e '
+            using Pkg
+            Pkg.instantiate()
+            Pkg.add(["DataFrames", "Statistics", "IJulia"])
+          '
+
+      # ── Build the graph ────────────────────────────────────────────────
+      - name: Run pipeline
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_API_TOKEN }}
+        run: julia --project -t auto scripts/build.jl
+
+      # ── Quarto ─────────────────────────────────────────────────────────
+      - uses: quarto-dev/quarto-actions/setup@v2
+
+      # Register the kernel the notebook's YAML header expects
+      # (jupyter: julia-pkgkg-1.12).  --project=@. from the repo root
+      # resolves to the root Project.toml, which now includes all deps.
+      - name: Register Jupyter kernel
+        run: |
+          julia --project -e '
+            using IJulia
+            installkernel("Julia PkgKG", "--project=@.")
+          '
+
+      # Override the hardcoded subtitle date with today's snapshot date
+      - name: Render notebook
+        run: |
+          SUBTITLE="Dependency structure, contributor data, and maintenance signals from the General registry, $(date -u +'%-d %B %Y')"
+          quarto render notebook/ecosystem_insights.qmd --metadata "subtitle:$SUBTITLE"
+
+      # ── Package for commit ─────────────────────────────────────────────
+      - name: Update web assets
+        run: |
+          cp notebook/ecosystem_insights.html web/index.html
+          gzip -9 -k -f julia_ecosystem.nq
+          mv julia_ecosystem.nq.gz web/data.nq.gz
+
+      - name: Commit and push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/index.html web/data.nq.gz
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: refresh ecosystem graph ($(date -u +%Y-%m-%d))"
+            git push
+          fi
