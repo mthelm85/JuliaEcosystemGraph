@@ -1,19 +1,14 @@
 name: Rebuild ecosystem graph
 
-# Runs the full pipeline end-to-end: crawl → build graph → render notebook →
-# compress snapshot → commit.  The push to main then triggers the Pages
-# workflow, so the site updates automatically.
+# Two jobs: crawl (5h) then render (~15 min).  If render fails, use
+# "Re-run failed jobs" from the Actions UI — the crawl is skipped and
+# its artifact is reused, so iteration on render issues takes minutes.
 #
 # Usage: Actions → "Rebuild ecosystem graph" → Run workflow
-#
-# To add a nightly schedule, uncomment the cron line below.
 #
 # Requires a repository secret named GH_API_TOKEN — a fine-grained PAT with:
 #   • Contents: read/write (push the updated data)
 #   • Public repositories: read (pipeline API calls)
-# The built-in GITHUB_TOKEN has stricter secondary rate limits that stretch the
-# contributor crawl well past the 6-hour job timeout, and pushes made with it
-# don't trigger other workflows (so the Pages deploy wouldn't fire).
 
 on:
   workflow_dispatch:
@@ -21,47 +16,30 @@ on:
   #   - cron: '0 6 * * 0'   # weekly, Sunday 06:00 UTC
 
 permissions:
-  contents: write          # push the updated data back to the repo
+  contents: write
 
 concurrency:
   group: build-graph
-  cancel-in-progress: false  # let a long run finish
+  cancel-in-progress: false
 
 jobs:
-  build:
+  # ════════════════════════════════════════════════════════════════════
+  crawl:
     runs-on: ubuntu-latest
-    timeout-minutes: 420    # 7 hours — the contributor crawl takes ~5h
+    timeout-minutes: 420      # 7 hours — contributor crawl takes ~5h
 
     steps:
-      # Use the PAT for checkout so that the push at the end authenticates
-      # as you — pushes from the default GITHUB_TOKEN don't trigger other
-      # workflows, which would prevent the Pages deploy from firing.
       - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GH_API_TOKEN }}
 
-      # ── Julia ──────────────────────────────────────────────────────────
       - uses: julia-actions/setup-julia@v2
         with:
           version: '1.12'
 
       - uses: julia-actions/cache@v2
 
-      # Install the project deps plus the extras the notebook needs
-      # (DataFrames, Statistics) and IJulia for kernel registration.
-      # These modify Project.toml on disk but we only commit web/ files.
-      - name: Install dependencies
-        run: |
-          julia --project -e '
-            using Pkg
-            Pkg.instantiate()
-            Pkg.add(["DataFrames", "Statistics", "IJulia"])
-          '
+      - name: Instantiate project
+        run: julia --project -e 'using Pkg; Pkg.instantiate()'
 
-      # ── Build the graph ────────────────────────────────────────────────
-      # Cache the pipeline's working directory (out/) so that re-runs after
-      # a later-step failure resume from checkpoints instead of re-crawling.
-      # The key includes the date so a fresh crawl starts each new day.
       - name: Restore pipeline cache
         uses: actions/cache@v4
         with:
@@ -77,18 +55,52 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GH_API_TOKEN }}
         run: julia --project -t auto scripts/build.jl
 
-      # ── Quarto ─────────────────────────────────────────────────────────
+      - name: Upload graph
+        uses: actions/upload-artifact@v4
+        with:
+          name: ecosystem-graph
+          path: julia_ecosystem.nq
+          retention-days: 7
+
+  # ════════════════════════════════════════════════════════════════════
+  render:
+    needs: crawl
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_API_TOKEN }}
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+
+      - uses: julia-actions/cache@v2
+
+      - name: Install dependencies
+        run: |
+          julia --project -e '
+            using Pkg
+            Pkg.instantiate()
+            Pkg.add(["DataFrames", "Statistics", "IJulia"])
+          '
+
+      - name: Download graph
+        uses: actions/download-artifact@v4
+        with:
+          name: ecosystem-graph
+
       - uses: quarto-dev/quarto-actions/setup@v2
 
-      # Register a Julia Jupyter kernel, then copy it next to the python3
-      # kernel so Quarto can discover it (Quarto scans /usr/share/jupyter
-      # but not ~/.local/share/jupyter on Actions runners).
       - name: Register Jupyter kernel
         run: |
           julia --project -e '
             using IJulia
             installkernel("Julia", "--project=@.")
           '
+          sudo mkdir -p /usr/share/jupyter/kernels
           sudo cp -r ~/.local/share/jupyter/kernels/julia-1.12 /usr/share/jupyter/kernels/
 
       - name: Render notebook
@@ -96,7 +108,6 @@ jobs:
           SUBTITLE="Dependency structure, contributor data, and maintenance signals from the General registry, $(date -u +'%-d %B %Y')"
           quarto render notebook/ecosystem_insights.qmd --metadata "subtitle:$SUBTITLE"
 
-      # ── Package for commit ─────────────────────────────────────────────
       - name: Update web assets
         run: |
           cp notebook/ecosystem_insights.html web/index.html
