@@ -59,6 +59,19 @@ jobs:
           '
 
       # ── Build the graph ────────────────────────────────────────────────
+      # Cache the pipeline's working directory (out/) so that re-runs after
+      # a later-step failure resume from checkpoints instead of re-crawling.
+      # The key includes the date so a fresh crawl starts each new day.
+      - name: Restore pipeline cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            out
+            julia_ecosystem.nq
+          key: pipeline-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            pipeline-${{ runner.os }}-
+
       - name: Run pipeline
         env:
           GITHUB_TOKEN: ${{ secrets.GH_API_TOKEN }}
@@ -67,17 +80,17 @@ jobs:
       # ── Quarto ─────────────────────────────────────────────────────────
       - uses: quarto-dev/quarto-actions/setup@v2
 
-      # Register the kernel the notebook's YAML header expects
-      # (jupyter: julia-pkgkg-1.12).  --project=@. from the repo root
-      # resolves to the root Project.toml, which now includes all deps.
+      # Register a Julia Jupyter kernel, then copy it next to the python3
+      # kernel so Quarto can discover it (Quarto scans /usr/share/jupyter
+      # but not ~/.local/share/jupyter on Actions runners).
       - name: Register Jupyter kernel
         run: |
           julia --project -e '
             using IJulia
-            installkernel("Julia PkgKG", "--project=@.")
+            installkernel("Julia", "--project=@.")
           '
+          sudo cp -r ~/.local/share/jupyter/kernels/julia-1.12 /usr/share/jupyter/kernels/
 
-      # Override the hardcoded subtitle date with today's snapshot date
       - name: Render notebook
         run: |
           SUBTITLE="Dependency structure, contributor data, and maintenance signals from the General registry, $(date -u +'%-d %B %Y')"
