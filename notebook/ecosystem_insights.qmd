@@ -9,7 +9,7 @@ format:
     page-layout: full
     embed-resources: true
     fig-cap-location: bottom
-jupyter: julia-1.12
+jupyter: julia-1.13
 execute:
   echo: false
   warning: false

@@ -40,7 +40,7 @@ jobs:
 
       - uses: julia-actions/setup-julia@v2
         with:
-          version: '1.12'
+          version: '1.13'
 
       - uses: julia-actions/cache@v2
 
@@ -83,24 +83,21 @@ jobs:
 
       - uses: julia-actions/setup-julia@v2
         with:
-          version: '1.12'
+          version: '1.13'
 
       - uses: julia-actions/cache@v2
 
-      # Install project deps, add the notebook extras, then re-instantiate
-      # to ensure all transitive deps (like PrettyTables) are downloaded.
-      # Precompile everything outside the kernel to avoid an IJulia
-      # world-age bug that crashes during in-kernel precompilation.
-      - name: Install and precompile
-        run: |
-          julia --project -e '
-            using Pkg
-            Pkg.instantiate()
-            Pkg.add(["DataFrames", "Statistics", "IJulia"])
-            Pkg.instantiate()
-            Pkg.precompile()
-          '
-          julia --project -e 'using RDF, Graphs, DataFrames, Statistics, Dates; import JSON, IJulia'
+      # All deps (including DataFrames, Statistics) are in the committed
+      # Manifest — no Pkg.add needed.  IJulia is installed to the default
+      # environment since it's only used for kernel registration.
+      - name: Install project dependencies
+        run: julia --project -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
+
+      - name: Install IJulia
+        run: julia -e 'using Pkg; Pkg.add("IJulia")'
+
+      - name: Precompile notebook packages
+        run: julia --project -e 'using RDF, Graphs, DataFrames, Statistics, Dates; import JSON'
 
       - name: Download graph
         uses: actions/download-artifact@v4
@@ -109,10 +106,6 @@ jobs:
 
       - uses: quarto-dev/quarto-actions/setup@v2
 
-      # Install jupyter via pip so Quarto can use it for kernel discovery.
-      # Then IJulia registers the Julia kernel where pip-jupyter looks
-      # (~/.local/share/jupyter/kernels/).  QUARTO_PYTHON ensures Quarto
-      # uses this Python rather than its own bundled environment.
       - name: Register Jupyter kernel
         run: |
           pip install jupyter
@@ -120,7 +113,6 @@ jobs:
             using IJulia
             installkernel("Julia", "--project=@.", "--compiled-modules=existing")
           '
-          echo "=== Verify kernel is visible ==="
           jupyter kernelspec list
 
       - name: Render notebook
