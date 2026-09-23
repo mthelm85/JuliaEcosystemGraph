@@ -94,25 +94,23 @@ jobs:
 
       - uses: quarto-dev/quarto-actions/setup@v2
 
+      # Install jupyter via pip so Quarto can use it for kernel discovery.
+      # Then IJulia registers the Julia kernel where pip-jupyter looks
+      # (~/.local/share/jupyter/kernels/).  QUARTO_PYTHON ensures Quarto
+      # uses this Python rather than its own bundled environment.
       - name: Register Jupyter kernel
         run: |
+          pip install jupyter
           julia --project -e '
             using IJulia
             installkernel("Julia", "--project=@.")
           '
-          # Find where Quarto found the python3 kernel and put Julia there too
-          echo "=== quarto check jupyter ==="
-          quarto check jupyter || true
-          echo "=== All kernel.json files on system ==="
-          find / -path "*/kernels/*/kernel.json" 2>/dev/null || true
-          echo "=== Copying Julia kernel next to every python3 kernel ==="
-          for kdir in $(find / -path "*/kernels/python3" -type d 2>/dev/null); do
-            parent=$(dirname "$kdir")
-            echo "  -> $parent/"
-            sudo cp -r ~/.local/share/jupyter/kernels/julia-1.12 "$parent/"
-          done
+          echo "=== Verify kernel is visible ==="
+          jupyter kernelspec list
 
       - name: Render notebook
+        env:
+          QUARTO_PYTHON: /usr/bin/python3
         run: |
           SUBTITLE="Dependency structure, contributor data, and maintenance signals from the General registry, $(date -u +'%-d %B %Y')"
           quarto render notebook/ecosystem_insights.qmd --metadata "subtitle:$SUBTITLE"
