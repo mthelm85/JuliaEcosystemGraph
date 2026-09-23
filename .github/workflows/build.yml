@@ -12,6 +12,13 @@ name: Rebuild ecosystem graph
 
 on:
   workflow_dispatch:
+    inputs:
+      snapshot_date:
+        description: >
+          Pin the snapshot date (YYYY-MM-DD).  Leave blank for today.
+          Set to a previous date to reuse cached crawl data.
+        required: false
+        default: ''
   # schedule:
   #   - cron: '0 6 * * 0'   # weekly, Sunday 06:00 UTC
 
@@ -53,6 +60,7 @@ jobs:
       - name: Run pipeline
         env:
           GITHUB_TOKEN: ${{ secrets.GH_API_TOKEN }}
+          KG_SNAPSHOT_DATE: ${{ inputs.snapshot_date }}
         run: julia --project -t auto scripts/build.jl
 
       - name: Upload graph
