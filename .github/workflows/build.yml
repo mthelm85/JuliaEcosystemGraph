@@ -100,8 +100,17 @@ jobs:
             using IJulia
             installkernel("Julia", "--project=@.")
           '
-          sudo mkdir -p /usr/share/jupyter/kernels
-          sudo cp -r ~/.local/share/jupyter/kernels/julia-1.12 /usr/share/jupyter/kernels/
+          # Find where Quarto found the python3 kernel and put Julia there too
+          echo "=== quarto check jupyter ==="
+          quarto check jupyter || true
+          echo "=== All kernel.json files on system ==="
+          find / -path "*/kernels/*/kernel.json" 2>/dev/null || true
+          echo "=== Copying Julia kernel next to every python3 kernel ==="
+          for kdir in $(find / -path "*/kernels/python3" -type d 2>/dev/null); do
+            parent=$(dirname "$kdir")
+            echo "  -> $parent/"
+            sudo cp -r ~/.local/share/jupyter/kernels/julia-1.12 "$parent/"
+          done
 
       - name: Render notebook
         run: |
