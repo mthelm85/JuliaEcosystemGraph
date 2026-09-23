@@ -95,6 +95,11 @@ jobs:
             Pkg.add(["DataFrames", "Statistics", "IJulia"])
           '
 
+      # Precompile outside the kernel to avoid an IJulia world-age bug
+      # that crashes when packages precompile inside the Jupyter process.
+      - name: Precompile notebook packages
+        run: julia --project -e 'using RDF, Graphs, DataFrames, Statistics, Dates; import JSON, IJulia'
+
       - name: Download graph
         uses: actions/download-artifact@v4
         with:
