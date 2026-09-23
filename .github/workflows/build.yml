@@ -97,8 +97,11 @@ jobs:
 
       # Precompile outside the kernel to avoid an IJulia world-age bug
       # that crashes when packages precompile inside the Jupyter process.
+      # Run from notebook/ with --project=@. to match the kernel's exact
+      # environment so the precompilation cache keys align.
       - name: Precompile notebook packages
-        run: julia --project -e 'using RDF, Graphs, DataFrames, Statistics, Dates; import JSON, IJulia'
+        working-directory: notebook
+        run: julia --project=@. -e 'using RDF, Graphs, DataFrames, Statistics, Dates; import JSON, IJulia'
 
       - name: Download graph
         uses: actions/download-artifact@v4
@@ -116,7 +119,7 @@ jobs:
           pip install jupyter
           julia --project -e '
             using IJulia
-            installkernel("Julia", "--project=@.")
+            installkernel("Julia", "--project=@.", "--compiled-modules=existing")
           '
           echo "=== Verify kernel is visible ==="
           jupyter kernelspec list
