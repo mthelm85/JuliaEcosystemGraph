@@ -87,14 +87,10 @@ jobs:
 
       - uses: julia-actions/cache@v2
 
-      # All deps (including DataFrames, Statistics) are in the committed
-      # Manifest — no Pkg.add needed.  IJulia is installed to the default
-      # environment since it's only used for kernel registration.
+      # All deps (including DataFrames, Statistics, IJulia) are in the
+      # committed Manifest — one instantiate installs everything.
       - name: Install project dependencies
         run: julia --project -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
-
-      - name: Install IJulia
-        run: julia -e 'using Pkg; Pkg.add("IJulia")'
 
       - name: Precompile notebook packages
         run: julia --project -e 'using RDF, Graphs, DataFrames, Statistics, Dates; import JSON'
@@ -111,7 +107,7 @@ jobs:
           pip install jupyter
           julia --project -e '
             using IJulia
-            installkernel("Julia", "--project=@.", "--compiled-modules=existing")
+            installkernel("Julia", "--project=$(ENV["GITHUB_WORKSPACE"])", "--compiled-modules=existing")
           '
           jupyter kernelspec list
 
