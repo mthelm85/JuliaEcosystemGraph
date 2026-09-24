@@ -60,7 +60,9 @@ function config_from_env()
         # KG_SNAPSHOT_DATE pins the snapshot date. Set it when re-deriving an
         # existing graph so an advanced machine clock doesn't mint a second,
         # partial snapshot instead of updating the existing one.
-        snapshot_date = get(ENV, "KG_SNAPSHOT_DATE", Dates.format(today(), "yyyy-mm-dd")),
+        snapshot_date = let sd = get(ENV, "KG_SNAPSHOT_DATE", "")
+            isempty(strip(sd)) ? Dates.format(today(), "yyyy-mm-dd") : sd
+        end,
     )
 end
 
