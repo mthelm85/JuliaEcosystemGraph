@@ -33,6 +33,7 @@ function build(; phases::Vector{Symbol}=Symbol[])
     println("\n=== Registry scan ===")
     pkgs = scan_registry(cfg)
     println("  $(length(pkgs)) packages")
+    isempty(pkgs) && error("registry scan returned 0 packages — aborting to avoid overwriting cached data")
 
     if wants(:registry)
         g = registry_graph(cfg, pkgs)

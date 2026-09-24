@@ -29,29 +29,32 @@ function scan_registry(cfg::Config)::Vector{PkgInfo}
     entries = collect(values(reg.pkgs))
     scratch = Vector{Union{PkgInfo,Nothing}}(nothing, length(entries))
 
+    uuid_to_name = Dict(uuid => entry.name for (uuid, entry) in reg.pkgs)
+    julia_uuid   = Pkg.Registry.JULIA_UUID
+
     Threads.@threads for i in eachindex(entries)
         e    = entries[i]
-        info = try Pkg.Registry.registry_info(e) catch; nothing end
+        info = try Pkg.Registry.registry_info(reg, e) catch; nothing end
         (isnothing(info) || isnothing(info.repo) || isempty(info.version_info)) && continue
 
         repo       = strip_git(rstrip(info.repo, '/'))
         latest_ver = maximum(keys(info.version_info))
         gh         = parse_github(repo)
 
-        # Dependencies of the latest version only (stdlibs and "julia" won't
-        # resolve against the registry name set and get dropped downstream)
         dep_names = Set{String}()
         for (vspec, deps) in info.deps
             latest_ver in vspec || continue
-            union!(dep_names, keys(deps))
+            for uuid in deps
+                uuid == julia_uuid && continue
+                name = get(uuid_to_name, uuid, nothing)
+                isnothing(name) || push!(dep_names, name)
+            end
         end
-        delete!(dep_names, "julia")
 
-        # Julia compat lower bound for the latest version
         min_julia = nothing
         for (vspec, compat) in info.compat
             latest_ver in vspec || continue
-            spec = get(compat, "julia", nothing)
+            spec = get(compat, julia_uuid, nothing)
             isnothing(spec) || (min_julia = string(spec); break)
         end
 
