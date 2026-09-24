@@ -364,7 +364,7 @@ directly — and see its record below.
 
 ```{julia}
 #| output: asis
-prmax = maximum(n["pr"] for n in NET.nodes)
+prmax = isempty(NET.nodes) ? 0.0 : maximum(n["pr"] for n in NET.nodes)
 embed_json("net", Dict("nodes"=>NET.nodes, "links"=>NET.links, "prmax"=>prmax, "k"=>NET.k))
 ```
 

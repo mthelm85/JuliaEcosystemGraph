@@ -188,12 +188,14 @@ function network_data(ds; kstart=5, maxnodes=700)
     names = collect(keep)
     idx = Dict(n => i for (i, n) in enumerate(names))
     N = length(names)
+    N == 0 && return (nodes=Dict{String,Any}[], links=Dict{String,Int}[], k=kstart)
     dg = SimpleDiGraph(N)
     for r in eachrow(q(ds, "SELECT ?a ?b WHERE { ?x jl:dependsOn ?y . ?x rdfs:label ?a . ?y rdfs:label ?b }"))
         (haskey(idx, r.a) && haskey(idx, r.b)) || continue
         add_edge!(dg, idx[r.a], idx[r.b])
     end
     ug = SimpleGraph(dg)                       # k-core is undirected
+    ne(ug) == 0 && return (nodes=Dict{String,Any}[], links=Dict{String,Int}[], k=kstart)
 
     local core, k
     k = kstart
