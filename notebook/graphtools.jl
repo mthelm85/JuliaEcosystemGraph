@@ -55,7 +55,8 @@ pkg_iri(name) = IRI(PKG_PRE * name)
 
 juliahub_link(name) = "[`$name`](https://juliahub.com/ui/Packages/General/$name)"
 github_link(login)  = "[$login](https://github.com/$login)"
-fmt_int(n) = ismissing(n) ? "—" : replace(string(round(Int, n)), r"(?<=\d)(?=(\d{3})+$)" => ",")
+fmt_int(n) = (ismissing(n) || (n isa AbstractFloat && isnan(n))) ? "—" :
+    replace(string(round(Int, n)), r"(?<=\d)(?=(\d{3})+$)" => ",")
 
 # Data bridge to the client. Writes `data` as `window.__DATA_<name>` into a
 # sidecar `<name>.js` file and emits a <script src> tag; Quarto's

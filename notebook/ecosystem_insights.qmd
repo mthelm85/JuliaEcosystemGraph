@@ -80,7 +80,7 @@ $(stat(n_pkg,"packages"))$(stat(n_people,"contributors"))$(stat(n_dep,"dependenc
 </div>""")
 ```
 
-`_jll` wrappers account for `{julia} round(Int, 100*n_jll/n_pkg)`% of the
+`_jll` wrappers account for `{julia} n_pkg > 0 ? round(Int, 100*n_jll/n_pkg) : 0`% of the
 registry (`{julia} fmt_int(n_jll)` packages). Being BinaryBuilder-generated
 rather than hand-authored, they are excluded from the ranked analyses below,
 as are standard libraries — the registry represents standard libraries only
@@ -120,7 +120,7 @@ Direct and transitive counts differ by one to two orders of magnitude at the
 top of the distribution. The highest-ranked package, `{julia} ld.name[1]`, has
 `{julia} fmt_int(ld.dir[1])` direct dependents but is reachable from
 **`{julia} fmt_int(ld.trans[1])`** packages
-(`{julia} round(Int, 100*ld.trans[1]/n_pkg)`% of the registry). The ranking is
+(`{julia} n_pkg > 0 && nrow(ld) > 0 ? round(Int, 100*ld.trans[1]/n_pkg) : 0`% of the registry). The ranking is
 dominated by low-level infrastructure — array and iterator interfaces, compiler
 and macro utilities, serialization, and numerical primitives — rather than
 end-user libraries.
