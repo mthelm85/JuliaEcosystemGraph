@@ -117,9 +117,9 @@ println(join(lines, "\n"))
 by transitive dependents. {.striped tbl-colwidths="[6,44,22,28]"}
 
 Direct and transitive counts differ by one to two orders of magnitude at the
-top of the distribution. The highest-ranked package, `{julia} ld.name[1]`, has
-`{julia} fmt_int(ld.dir[1])` direct dependents but is reachable from
-**`{julia} fmt_int(ld.trans[1])`** packages
+top of the distribution. The highest-ranked package, `{julia} nrow(ld) > 0 ? ld.name[1] : "—"`, has
+`{julia} nrow(ld) > 0 ? fmt_int(ld.dir[1]) : "—"` direct dependents but is reachable from
+**`{julia} nrow(ld) > 0 ? fmt_int(ld.trans[1]) : "—"`** packages
 (`{julia} n_pkg > 0 && nrow(ld) > 0 ? round(Int, 100*ld.trans[1]/n_pkg) : 0`% of the registry). The ranking is
 dominated by low-level infrastructure — array and iterator interfaces, compiler
 and macro utilities, serialization, and numerical primitives — rather than
@@ -255,7 +255,7 @@ println(join(lines, "\n"))
 Restricted to ≥ 1,000 transitive dependents. {.striped tbl-colwidths="[40,15,20,25]"}
 
 `DataValueInterfaces` is the extreme case: 2 direct dependents,
-`{julia} fmt_int(first(hid.trans))` transitive. Such packages are not
+`{julia} nrow(hid) > 0 ? fmt_int(first(hid.trans)) : "—"` transitive. Such packages are not
 identifiable from stars or direct-dependent counts; the ratio requires the
 full transitive closure.
 
